@@ -1,0 +1,71 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            library: build/Release/roomy.dll
+          # An older Ubuntu keeps the required glibc version low
+          - os: ubuntu-22.04
+            library: build/libroomy.so
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: library-${{ matrix.os }}
+          path: ${{ matrix.library }}
+          if-no-files-found: error
+
+  bundle:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: bundle
+          pattern: library-*
+          merge-multiple: true
+
+      - name: Create plugin bundle
+        run: |
+          cp manifest.xml bundle/
+          cd bundle
+          zip ../roomy.mumble_plugin manifest.xml roomy.dll libroomy.so
+          unzip -l ../roomy.mumble_plugin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: roomy-plugin
+          path: roomy.mumble_plugin
+          if-no-files-found: error
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" roomy.mumble_plugin --title "${{ github.ref_name }}" --generate-notes
