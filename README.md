@@ -31,6 +31,17 @@ If Windows asks whether Mumble may accept network connections, allow it for priv
 
 Mute each other locally (right-click the other person, Local Mute). You can hear them through the air, and hearing them again through the headphones a moment later is distracting. Roomy does not do this for you.
 
+## Troubleshooting
+
+Everybody in the room has to be connected to the **same Mumble server** and be in the **same channel**. The introduction between plugins travels through the server, so two people on different servers (say, one on the LAN address and one on the public address of a different server) never see each other. Using the local address or the public address of the same server both work, the audio itself always goes directly over the local network.
+
+Roomy writes to Mumble's normal log window. After enabling the plugin you should see, in this order:
+
+1. `Roomy: Roomy 0.1.1 is active, listening on UDP port ... Local addresses: ...` when the plugin is enabled. If this never appears, the plugin is not enabled (Configure, Settings, Plugins). If the addresses say "none found", the PC has no private network address.
+2. `Roomy: looking for other Roomy users among the N other people in your channel.` after joining a channel. If N is 0, nobody else is there yet.
+3. `Roomy: (name) is running Roomy, trying to reach them at ...` when the other person's plugin answered through the server. If this never appears while both are in the channel, the other plugin is not running or the server dropped the message.
+4. `Roomy: linked with (name)` once the direct connection works. If instead you get `did not answer over the local network` after ten seconds, the two PCs cannot reach each other: check that they are on the same network (not guest Wi-Fi, not a VPN) and allow Mumble through the Windows firewall for private networks.
+
 ## How it works
 
 1. **Finding each other.** On joining a channel the plugin tells the other users in it, through the Mumble server, which local network addresses and port it listens on. Clients without the plugin ignore this.

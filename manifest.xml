@@ -5,5 +5,5 @@
     <plugin os="linux" arch="x64">libroomy.so</plugin>
   </assets>
   <name>Roomy</name>
-  <version>0.1.0</version>
+  <version>0.1.1</version>
 </bundle>

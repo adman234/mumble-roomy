@@ -33,6 +33,7 @@ namespace {
 	constexpr std::size_t kAudioSize     = kHeaderSize + kFrame * 2;
 	constexpr double kProbeIntervalMs    = 500.0;
 	constexpr double kLinkTimeoutMs      = 5000.0;
+	constexpr double kUnreachableMs     = 10000.0;
 	constexpr std::size_t kMaxCandidates = 8;
 
 	void closeSocket(std::intptr_t socket) {
@@ -271,6 +272,8 @@ void Net::addPeer(std::uint32_t userId, std::uint64_t nonce, const std::vector< 
 			peer.linked = false;
 			peer.nonce  = nonce;
 			peer.track  = std::make_shared< RefTrack >();
+			peer.addedMs             = nowMs();
+			peer.reportedUnreachable = false;
 		}
 		peer.candidates = candidates;
 		return;
@@ -284,6 +287,7 @@ void Net::addPeer(std::uint32_t userId, std::uint64_t nonce, const std::vector< 
 	peer.nonce      = nonce;
 	peer.candidates = candidates;
 	peer.track      = std::make_shared< RefTrack >();
+	peer.addedMs    = nowMs();
 	m_peers.push_back(std::move(peer));
 }
 
@@ -394,7 +398,8 @@ void Net::handlePacket(const std::uint8_t *data, std::size_t size, const Endpoin
 				continue;
 			}
 			if (!peer.linked) {
-				peer.linked = true;
+				peer.linked              = true;
+				peer.reportedUnreachable = false;
 				m_events.push_back({ peer.userId, true });
 			}
 			peer.endpoint    = from;
@@ -424,13 +429,19 @@ void Net::housekeeping(double now) {
 		std::lock_guard< std::mutex > lock(m_mutex);
 		for (Peer &peer : m_peers) {
 			if (peer.linked && now - peer.lastHeardMs > kLinkTimeoutMs) {
-				peer.linked = false;
+				peer.linked              = false;
+				peer.addedMs             = now;
+				peer.reportedUnreachable = false;
 				m_events.push_back({ peer.userId, false });
 			}
 			if (peer.linked) {
 				// Keeps the link alive while nobody is talking
 				probes.push_back({ peer.nonce, peer.endpoint });
 			} else {
+				if (!peer.reportedUnreachable && now - peer.addedMs > kUnreachableMs) {
+					peer.reportedUnreachable = true;
+					m_events.push_back({ peer.userId, false, true });
+				}
 				for (const Endpoint &candidate : peer.candidates) {
 					probes.push_back({ peer.nonce, candidate });
 				}

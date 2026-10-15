@@ -26,6 +26,8 @@ constexpr std::size_t kMaxPeers = 4;
 struct LinkEvent {
 	std::uint32_t userId;
 	bool linked;
+	/// Set (with linked false) when a peer has been known for a while without ever answering
+	bool unreachable = false;
 };
 
 struct LinkedRef {
@@ -80,6 +82,8 @@ private:
 		std::uint64_t nonce  = 0;
 		std::vector< Endpoint > candidates;
 		bool linked = false;
+		double addedMs            = 0.0;
+		bool reportedUnreachable = false;
 		Endpoint endpoint;
 		double lastHeardMs = 0.0;
 		std::shared_ptr< RefTrack > track;

@@ -106,6 +106,8 @@ void announce(mumble_connection_t connection) {
 	}
 	g_api.freeMemory(g_id, users);
 
+	log("Roomy: looking for other Roomy users among the " + std::to_string(others.size())
+		+ " other people in your channel.");
 	sendHello(connection, others.data(), others.size(), false);
 }
 
@@ -132,6 +134,8 @@ void handleHello(mumble_connection_t connection, mumble_userid_t sender, const s
 		return;
 	}
 
+	log("Roomy: " + userName(connection, sender) + " is running Roomy, trying to reach them at " + addresses.front()
+		+ ":" + std::to_string(port) + ".");
 	g_net.addPeer(sender, nonce, addresses, static_cast< std::uint16_t >(port));
 
 	if (!isReply) {
@@ -146,7 +150,11 @@ void reportLinkChanges() {
 	}
 	for (const LinkEvent &event : g_net.takeEvents()) {
 		const std::string name = userName(g_connection, event.userId);
-		if (event.linked) {
+		if (event.unreachable) {
+			log("Roomy: " + name
+				+ " is running Roomy but did not answer over the local network. Are you on the same network, and is "
+				  "a firewall blocking Mumble?");
+		} else if (event.linked) {
 			log("Roomy: linked with " + name + ". Their voice is now removed from your microphone.");
 		} else {
 			log("Roomy: lost the link with " + name + ".");
@@ -179,6 +187,15 @@ mumble_error_t mumble_init(mumble_plugin_id_t id) {
 		log("Roomy: could not open a network port, so nothing will be removed from your microphone.");
 		return MUMBLE_STATUS_OK;
 	}
+
+	std::string addressList;
+	for (const std::string &address : g_net.localAddresses()) {
+		addressList += (addressList.empty() ? "" : ", ") + address;
+	}
+	log("Roomy " + std::to_string(ROOMY_VERSION_MAJOR) + "." + std::to_string(ROOMY_VERSION_MINOR) + "."
+		+ std::to_string(ROOMY_VERSION_PATCH) + " is active, listening on UDP port " + std::to_string(g_net.port())
+		+ ". Local addresses: " + (addressList.empty() ? "none found, other users can't reach you" : addressList)
+		+ ".");
 
 	// The plugin may have been loaded while already connected to a server
 	mumble_connection_t connection = -1;
