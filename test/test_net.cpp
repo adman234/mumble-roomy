@@ -5,7 +5,9 @@
 
 #include <chrono>
 #include <cstdio>
+#include <mutex>
 #include <thread>
+#include <vector>
 
 using namespace roomy;
 
@@ -84,9 +86,49 @@ int main() {
 	PowerSpectrum silent;
 	check(!aliceRefs[0].track->envelope(start - 1.0, nowMs(), silent), "Bob sent nothing, Alice received nothing");
 
+	const NetStats aliceStats = alice.stats();
+	const NetStats bobStats   = bob.stats();
+	check(aliceStats.probesSent > 0 && bobStats.packetsAccepted > 0, "probes are sent and accepted packets counted");
+	check(bobStats.packetsRejected == 0 || bobStats.packetsAccepted > 0, "stats are consistent");
+
+	// A peer announcing itself twice only counts as new the first time
+	check(!alice.addPeer(2, bob.nonce(), { "127.0.0.1" }, bob.port()), "known peer is not reported as new again");
+	check(alice.addPeer(7, 12345, { "127.0.0.1" }, 9), "unknown peer is reported as new");
+
 	alice.stop();
 	bob.stop();
 	stranger.stop();
+
+	// Events reach a registered handler from the network thread, and a peer that never answers is reported
+	{
+		Net carol, dave;
+		std::mutex mutex;
+		std::vector< LinkEvent > seen;
+		carol.setEventHandler([&](const LinkEvent &event) {
+			std::lock_guard< std::mutex > lock(mutex);
+			seen.push_back(event);
+		});
+		check(carol.start(0) && dave.start(0), "second pair of sockets open");
+
+		carol.addPeer(4, dave.nonce(), { "127.0.0.1" }, dave.port());
+		dave.addPeer(3, carol.nonce(), { "127.0.0.1" }, carol.port());
+		// Nobody listens on this one
+		carol.addPeer(9, 987654321, { "127.0.0.1" }, 9);
+
+		bool gotLinked = false;
+		for (int i = 0; i < 60 && !gotLinked; ++i) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			std::lock_guard< std::mutex > lock(mutex);
+			for (const LinkEvent &event : seen) {
+				gotLinked = gotLinked || (event.linked && event.userId == 4);
+			}
+		}
+		check(gotLinked, "handler is told about a new link");
+		check(carol.takeEvents().empty(), "handled events are not kept for takeEvents");
+
+		carol.stop();
+		dave.stop();
+	}
 
 	return failures == 0 ? 0 : 1;
 }

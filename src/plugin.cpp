@@ -12,7 +12,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -37,6 +39,10 @@ mumble_plugin_id_t g_id = 0;
 Config g_config;
 Net g_net;
 std::unique_ptr< Suppressor > g_suppressors[kMaxChannels];
+
+// Names of the users that announced themselves. Written by the main thread, read by the network thread.
+std::mutex g_namesMutex;
+std::map< mumble_userid_t, std::string > g_names;
 
 // Only touched by Mumble's main thread
 bool g_synchronized             = false;
@@ -134,31 +140,49 @@ void handleHello(mumble_connection_t connection, mumble_userid_t sender, const s
 		return;
 	}
 
-	log("Roomy: " + userName(connection, sender) + " is running Roomy, trying to reach them at " + addresses.front()
-		+ ":" + std::to_string(port) + ".");
-	g_net.addPeer(sender, nonce, addresses, static_cast< std::uint16_t >(port));
+	const std::string name = userName(connection, sender);
+	{
+		std::lock_guard< std::mutex > lock(g_namesMutex);
+		g_names[sender] = name;
+	}
+	if (g_net.addPeer(sender, nonce, addresses, static_cast< std::uint16_t >(port))) {
+		log("Roomy: " + name + " is running Roomy, trying to reach them at " + addresses.front() + ":"
+			+ std::to_string(port) + ".");
+	}
 
 	if (!isReply) {
 		sendHello(connection, &sender, 1, true);
 	}
 }
 
-/// Reports what the network thread has found out in the meantime. Must be called from the main thread.
-void reportLinkChanges() {
-	if (!g_synchronized) {
-		return;
+/// Called from the network thread. Logging from there is fine: Mumble's API gives up after 800 ms instead of
+/// waiting forever, so it can't deadlock with the main thread.
+void onLinkEvent(const LinkEvent &event) {
+	std::string name;
+	{
+		std::lock_guard< std::mutex > lock(g_namesMutex);
+		const auto it = g_names.find(event.userId);
+		name          = it != g_names.end() ? it->second : "user " + std::to_string(event.userId);
 	}
-	for (const LinkEvent &event : g_net.takeEvents()) {
-		const std::string name = userName(g_connection, event.userId);
-		if (event.unreachable) {
-			log("Roomy: " + name
-				+ " is running Roomy but did not answer over the local network. Are you on the same network, and is "
-				  "a firewall blocking Mumble?");
-		} else if (event.linked) {
-			log("Roomy: linked with " + name + ". Their voice is now removed from your microphone.");
+
+	if (event.unreachable) {
+		const NetStats stats = g_net.stats();
+		std::string message  = "Roomy: " + name + " is running Roomy but has not answered over the local network. Sent "
+							  + std::to_string(stats.probesSent) + " probes, received "
+							  + std::to_string(stats.packetsAccepted) + " usable and "
+							  + std::to_string(stats.packetsRejected) + " unusable packets. ";
+		if (stats.packetsAccepted == 0 && stats.packetsRejected == 0) {
+			message += "Nothing arrives at all: check that both PCs are on the same network and that a firewall "
+					   "is not blocking Mumble (a network set to Public in Windows blocks incoming traffic).";
 		} else {
-			log("Roomy: lost the link with " + name + ".");
+			message += "Packets arrive but are not from them, which suggests one of you was restarted. Reconnect "
+					   "to the server.";
 		}
+		log(message);
+	} else if (event.linked) {
+		log("Roomy: linked with " + name + ". Their voice is now removed from your microphone.");
+	} else {
+		log("Roomy: lost the link with " + name + ".");
 	}
 }
 
@@ -188,6 +212,8 @@ mumble_error_t mumble_init(mumble_plugin_id_t id) {
 		return MUMBLE_STATUS_OK;
 	}
 
+	g_net.setEventHandler(onLinkEvent);
+
 	std::string addressList;
 	for (const std::string &address : g_net.localAddresses()) {
 		addressList += (addressList.empty() ? "" : ", ") + address;
@@ -209,6 +235,7 @@ mumble_error_t mumble_init(mumble_plugin_id_t id) {
 }
 
 void mumble_shutdown() {
+	g_net.setEventHandler(nullptr);
 	g_net.stop();
 	g_synchronized = false;
 }
@@ -285,19 +312,12 @@ void mumble_onChannelEntered(mumble_connection_t connection, mumble_userid_t use
 		}
 	}
 
-	reportLinkChanges();
 }
 
 void mumble_onUserRemoved(mumble_connection_t connection, mumble_userid_t userID) {
 	if (connection == g_connection) {
 		g_net.removePeer(userID);
 	}
-}
-
-void mumble_onUserTalkingStateChanged(mumble_connection_t, mumble_userid_t, mumble_talking_state_t) {
-	// Nothing to do with the talking state itself. This merely is an event that fires often enough on the main
-	// thread to report link changes in a timely manner.
-	reportLinkChanges();
 }
 
 bool mumble_onReceiveData(mumble_connection_t connection, mumble_userid_t sender, const uint8_t *data,
@@ -308,7 +328,6 @@ bool mumble_onReceiveData(mumble_connection_t connection, mumble_userid_t sender
 
 	if (g_synchronized && connection == g_connection && sender != g_localUser && data && dataLength <= kMaxHelloBytes) {
 		handleHello(connection, sender, std::string(reinterpret_cast< const char * >(data), dataLength));
-		reportLinkChanges();
 	}
 
 	return true;

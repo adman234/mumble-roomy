@@ -34,6 +34,7 @@ namespace {
 	constexpr double kProbeIntervalMs    = 500.0;
 	constexpr double kLinkTimeoutMs      = 5000.0;
 	constexpr double kUnreachableMs     = 10000.0;
+	constexpr double kUnreachableRepeatMs = 30000.0;
 	constexpr std::size_t kMaxCandidates = 8;
 
 	void closeSocket(std::intptr_t socket) {
@@ -242,7 +243,7 @@ std::vector< std::string > Net::localAddresses() const {
 	return result;
 }
 
-void Net::addPeer(std::uint32_t userId, std::uint64_t nonce, const std::vector< std::string > &addresses,
+bool Net::addPeer(std::uint32_t userId, std::uint64_t nonce, const std::vector< std::string > &addresses,
 				  std::uint16_t port) {
 	std::vector< Endpoint > candidates;
 	for (const std::string &address : addresses) {
@@ -255,7 +256,7 @@ void Net::addPeer(std::uint32_t userId, std::uint64_t nonce, const std::vector< 
 		}
 	}
 	if (candidates.empty() || port == 0 || nonce == 0) {
-		return;
+		return false;
 	}
 
 	std::lock_guard< std::mutex > lock(m_mutex);
@@ -264,31 +265,33 @@ void Net::addPeer(std::uint32_t userId, std::uint64_t nonce, const std::vector< 
 		if (peer.userId != userId) {
 			continue;
 		}
+		bool restarted = false;
 		if (peer.nonce != nonce) {
 			// The other client was restarted
 			if (peer.linked) {
 				m_events.push_back({ userId, false });
 			}
-			peer.linked = false;
-			peer.nonce  = nonce;
-			peer.track  = std::make_shared< RefTrack >();
-			peer.addedMs             = nowMs();
-			peer.reportedUnreachable = false;
+			peer.linked       = false;
+			peer.nonce        = nonce;
+			peer.track        = std::make_shared< RefTrack >();
+			peer.nextReportMs = nowMs() + kUnreachableMs;
+			restarted         = true;
 		}
 		peer.candidates = candidates;
-		return;
+		return restarted;
 	}
 
 	if (m_peers.size() >= kMaxPeers) {
-		return;
+		return false;
 	}
 	Peer peer;
 	peer.userId     = userId;
 	peer.nonce      = nonce;
 	peer.candidates = candidates;
 	peer.track      = std::make_shared< RefTrack >();
-	peer.addedMs    = nowMs();
+	peer.nextReportMs = nowMs() + kUnreachableMs;
 	m_peers.push_back(std::move(peer));
+	return true;
 }
 
 void Net::removePeer(std::uint32_t userId) {
@@ -342,6 +345,35 @@ std::size_t Net::linked(LinkedRef *out, std::size_t max) {
 	return count;
 }
 
+void Net::setEventHandler(EventHandler handler) {
+	std::lock_guard< std::mutex > lock(m_mutex);
+	m_handler = std::move(handler);
+}
+
+NetStats Net::stats() const {
+	NetStats result;
+	result.probesSent      = m_probesSent.load();
+	result.packetsAccepted = m_accepted.load();
+	result.packetsRejected = m_rejected.load();
+	return result;
+}
+
+void Net::dispatchEvents() {
+	EventHandler handler;
+	std::vector< LinkEvent > events;
+	{
+		std::lock_guard< std::mutex > lock(m_mutex);
+		if (!m_handler || m_events.empty()) {
+			return;
+		}
+		handler = m_handler;
+		events.swap(m_events);
+	}
+	for (const LinkEvent &event : events) {
+		handler(event);
+	}
+}
+
 std::vector< LinkEvent > Net::takeEvents() {
 	std::lock_guard< std::mutex > lock(m_mutex);
 	std::vector< LinkEvent > events;
@@ -382,10 +414,8 @@ void Net::sendPacket(std::uint8_t type, std::uint64_t peerNonce, const Endpoint 
 }
 
 void Net::handlePacket(const std::uint8_t *data, std::size_t size, const Endpoint &from, double now) {
-	if (size < kHeaderSize || std::memcmp(data, kMagic, sizeof(kMagic)) != 0) {
-		return;
-	}
-	if (get64(data + 8) != m_nonce) {
+	if (size < kHeaderSize || std::memcmp(data, kMagic, sizeof(kMagic)) != 0 || get64(data + 8) != m_nonce) {
+		++m_rejected;
 		return;
 	}
 	const std::uint64_t sender = get64(data + 16);
@@ -399,7 +429,6 @@ void Net::handlePacket(const std::uint8_t *data, std::size_t size, const Endpoin
 			}
 			if (!peer.linked) {
 				peer.linked              = true;
-				peer.reportedUnreachable = false;
 				m_events.push_back({ peer.userId, true });
 			}
 			peer.endpoint    = from;
@@ -407,6 +436,12 @@ void Net::handlePacket(const std::uint8_t *data, std::size_t size, const Endpoin
 			track            = peer.track;
 			break;
 		}
+	}
+
+	if (track) {
+		++m_accepted;
+	} else {
+		++m_rejected;
 	}
 
 	if (track && data[4] == kTypeAudio && size == kAudioSize) {
@@ -429,17 +464,16 @@ void Net::housekeeping(double now) {
 		std::lock_guard< std::mutex > lock(m_mutex);
 		for (Peer &peer : m_peers) {
 			if (peer.linked && now - peer.lastHeardMs > kLinkTimeoutMs) {
-				peer.linked              = false;
-				peer.addedMs             = now;
-				peer.reportedUnreachable = false;
+				peer.linked = false;
+				peer.nextReportMs = now + kUnreachableMs;
 				m_events.push_back({ peer.userId, false });
 			}
 			if (peer.linked) {
 				// Keeps the link alive while nobody is talking
 				probes.push_back({ peer.nonce, peer.endpoint });
 			} else {
-				if (!peer.reportedUnreachable && now - peer.addedMs > kUnreachableMs) {
-					peer.reportedUnreachable = true;
+				if (now >= peer.nextReportMs) {
+					peer.nextReportMs = now + kUnreachableRepeatMs;
 					m_events.push_back({ peer.userId, false, true });
 				}
 				for (const Endpoint &candidate : peer.candidates) {
@@ -450,6 +484,7 @@ void Net::housekeeping(double now) {
 	}
 	for (const Probe &probe : probes) {
 		sendPacket(kTypeProbe, probe.nonce, probe.endpoint, 0, nullptr);
+		++m_probesSent;
 	}
 }
 
@@ -487,6 +522,8 @@ void Net::run() {
 			lastHousekeeping = now;
 			housekeeping(now);
 		}
+
+		dispatchEvents();
 	}
 }
 

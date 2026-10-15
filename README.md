@@ -39,10 +39,10 @@ Everybody in the room has to be connected to the **same Mumble server** and be i
 
 Roomy writes to Mumble's normal log window. After enabling the plugin you should see, in this order:
 
-1. `Roomy: Roomy 0.1.1 is active, listening on UDP port ... Local addresses: ...` when the plugin is enabled. If this never appears, the plugin is not enabled (Configure, Settings, Plugins). If the addresses say "none found", the PC has no private network address.
+1. `Roomy: Roomy 0.1.2 is active, listening on UDP port ... Local addresses: ...` when the plugin is enabled. If this never appears, the plugin is not enabled (Configure, Settings, Plugins). If the addresses say "none found", the PC has no private network address.
 2. `Roomy: looking for other Roomy users among the N other people in your channel.` after joining a channel. If N is 0, nobody else is there yet.
 3. `Roomy: (name) is running Roomy, trying to reach them at ...` when the other person's plugin answered through the server. If this never appears while both are in the channel, the other plugin is not running or the server dropped the message.
-4. `Roomy: linked with (name)` once the direct connection works. If instead you get `did not answer over the local network` after ten seconds, the two PCs cannot reach each other: check that they are on the same network (not guest Wi-Fi, not a VPN) and allow Mumble through the Windows firewall for private networks.
+4. `Roomy: linked with (name)` once the direct connection works. If instead you get `has not answered over the local network` after ten seconds (and again every thirty), the two PCs cannot reach each other. The message says how many probes were sent and how many packets arrived. If none arrived, check that both PCs are on the same network (not guest Wi-Fi, not a VPN) and that Windows does not treat the network as Public, which blocks incoming traffic. Set the network to Private (Settings, Network and internet, your connection, Network profile type) or add an inbound UDP allow rule for `mumble.exe`.
 
 ## How it works
 
