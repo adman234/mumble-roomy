@@ -64,8 +64,25 @@ jobs:
           path: roomy.mumble_plugin
           if-no-files-found: error
 
-      - name: Publish release
+      # Releases can be downloaded without a GitHub login, workflow artifacts can't.
+
+      - name: Publish release for a version tag
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" roomy.mumble_plugin --title "${{ github.ref_name }}" --generate-notes
+          TAG: ${{ github.ref_name }}
+        run: |
+          cp bundle/roomy.dll bundle/libroomy.so .
+          gh release create "$TAG" roomy.mumble_plugin roomy.dll libroomy.so --title "$TAG" --generate-notes --latest
+
+      - name: Publish latest build
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          cp bundle/roomy.dll bundle/libroomy.so .
+          VERSION=$(grep -o '<version>[^<]*' manifest.xml | cut -d'>' -f2)
+          NOTES="Built from commit $SHA. Install roomy.mumble_plugin from inside Mumble (Configure, Settings, Plugins, Install plugin), or copy roomy.dll into the Mumble plugins folder. Do not double-click the bundle to update an installed copy. See the README."
+          gh release delete latest --cleanup-tag --yes || true
+          gh release create latest roomy.mumble_plugin roomy.dll libroomy.so --target "$SHA" --title "Latest build (Roomy $VERSION)" --notes "$NOTES" --latest

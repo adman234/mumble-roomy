@@ -19,9 +19,11 @@ People outside the room need nothing. The server needs nothing.
 
 ## Install
 
-1. Download `roomy.mumble_plugin` from the [releases](https://github.com/adman234/mumble-roomy/releases), or from the `roomy-plugin` artifact of the latest [build](https://github.com/adman234/mumble-roomy/actions).
+1. Download `roomy.mumble_plugin` from the [latest release](https://github.com/adman234/mumble-roomy/releases/latest). The same page has `roomy.dll` (Windows) and `libroomy.so` (Linux) on their own.
 2. In Mumble open Configure, Settings, Plugins and choose Install plugin. Select the downloaded file.
 3. Tick Enable next to Roomy.
+
+**Do not double-click `roomy.mumble_plugin` to update an installed copy.** Mumble 1.5 crashes when it is started that way and the file would overwrite an existing plugin (the installer runs before Mumble has set up its plugin manager). A first install by double-click works. For updates use Install plugin inside Mumble, or close Mumble and copy `roomy.dll` into `%APPDATA%\Mumble\Mumble\Plugins` (Windows) or `~/.local/share/Mumble/Mumble/Plugins` (Linux), replacing the old file.
 
 There is nothing to pair. When two people running the plugin are in the same channel and can reach each other on the local network, Mumble's log shows "Roomy: linked with (name)".
 
